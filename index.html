@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Sales Calendar</title>
+
+  <!-- FullCalendar -->
+  <link
+    href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.11/index.global.min.css"
+    rel="stylesheet"
+  />
+
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      display: flex;
+      height: 100vh;
+    }
+
+    #calendar {
+      flex: 3;
+      padding: 20px;
+    }
+
+    #sidebar {
+      flex: 1;
+      border-left: 1px solid #ddd;
+      padding: 20px;
+      overflow-y: auto;
+      background: #fafafa;
+    }
+
+    .sale-item {
+      margin-bottom: 15px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid #eee;
+    }
+
+    .sale-title {
+      font-weight: bold;
+    }
+
+    .sale-dates {
+      font-size: 0.9em;
+      color: #555;
+    }
+
+    #weekPicker {
+      margin-bottom: 15px;
+      width: 100%;
+    }
+
+    /* 🚨 Ending soon styling (sidebar) */
+    .ending-soon {
+      background: #fff7ed; /* light orange */
+      border-bottom-color: #fdba74;
+    }
+
+    .ending-soon .sale-title::after {
+      content: "  • ENDING SOON";
+      font-weight: 700;
+      color: #c2410c;
+      font-size: 0.85em;
+    }
+
+    /* 🚨 Ending soon styling (calendar event) */
+    .fc-event.ending-soon-event {
+      outline: 2px solid #c2410c;
+      outline-offset: 1px;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="calendar"></div>
+
+  <div id="sidebar">
+    <h3>Weekly Sales</h3>
+    <label for="weekPicker"><strong>Select Week</strong></label>
+    <input type="date" id="weekPicker" />
+    <div id="weekly-sales"></div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.11/index.global.min.js"></script>
+
+  <script>
+    // 🔑 GOOGLE SHEETS CONFIG
+    const API_KEY = "AIzaSyCd5Qt45W5d9kvUTKoV6yovi8qVVlqjhvk";
+    const SHEET_ID = "1adrvtdoa1VPtGhhMvi99ofgje5srBvxLpe3e4kxj8ds";
+    const RANGE = "Sheet1!A2:D1000";
+
+    const sheetURL =
+      `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${RANGE}?key=${API_KEY}`;
+
+    // 🎨 Color by discount
+    function getSaleColor(percentage) {
+    if (percentage >= 50) return "#16a34a"; // red
+    if (percentage >= 30) return "#f97316"; // orange
+    if (percentage >= 10) return "#2563eb"; // blue
+      return "#808080"; // green
+    }
+
+    // FullCalendar expects end to be exclusive for all-day events
+    function addOneDay(dateStr) {
+      const d = new Date(dateStr + "T00:00:00");
+      d.setDate(d.getDate() + 1);
+      return d.toISOString().split("T")[0];
+    }
+
+    // Convert end-exclusive back to an inclusive end date for "ending soon" logic
+    function getInclusiveEndFromExclusive(endExclusiveStr) {
+      const d = new Date(endExclusiveStr + "T00:00:00");
+      d.setDate(d.getDate() - 1);
+      return d;
+    }
+
+    // 🚨 Determine if sale ends within the next 48 hours (and hasn't already ended)
+    function isEndingIn48Hours(eventObj) {
+      // eventObj.end is end-exclusive (YYYY-MM-DD)
+      const endInclusive = getInclusiveEndFromExclusive(eventObj.end);
+      const now = new Date();
+      const diffMs = endInclusive.getTime() - now.getTime();
+      return diffMs >= 0 && diffMs <= 48 * 60 * 60 * 1000;
+    }
+
+    function parseSheetData(values) {
+      return values
+        .filter(row => row.length >= 4)
+        .map(row => {
+          const percentage = Number(row[3]);
+          const start = row[1];
+          const endExclusive = addOneDay(row[2]);
+
+          const baseEvent = {
+            title: `${row[0]} (${percentage}% Off)`,
+            showName: row[0],
+            start,
+            end: endExclusive,
+            percentage,
+            color: getSaleColor(percentage)
+          };
+
+          // attach a flag we can use for both sidebar + calendar styling
+          baseEvent.extendedProps = {
+            endingSoon: isEndingIn48Hours(baseEvent)
+          };
+
+          return baseEvent;
+        });
+    }
+
+    // Week filtering logic
+    function isInSelectedWeek(start, endExclusive, selectedDate) {
+      const base = selectedDate ? new Date(selectedDate + "T00:00:00") : new Date();
+      const weekStart = new Date(base);
+      weekStart.setDate(base.getDate() - base.getDay());
+      weekStart.setHours(0, 0, 0, 0);
+
+      const weekEnd = new Date(weekStart);
+      weekEnd.setDate(weekStart.getDate() + 7);
+
+      // endExclusive means the event runs up to start-of-endExclusive
+      return new Date(endExclusive + "T00:00:00") >= weekStart && new Date(start + "T00:00:00") <= weekEnd;
+    }
+
+    // Format a Date -> YYYY-MM-DD (local, safe)
+    function toISODateLocal(dateObj) {
+      const d = new Date(dateObj);
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, "0");
+      const day = String(d.getDate()).padStart(2, "0");
+      return `${year}-${month}-${day}`;
+    }
+
+    // When you click an event, auto-select its week in the sidebar
+    function setWeekToDateAndRender(events, dateObj) {
+      const weekPicker = document.getElementById("weekPicker");
+      const iso = toISODateLocal(dateObj);
+      weekPicker.value = iso;
+      renderWeeklySales(events, iso);
+    }
+
+    // Sidebar renderer (sorted high → low discount)
+    function renderWeeklySales(events, selectedDate = null) {
+      const container = document.getElementById("weekly-sales");
+      container.innerHTML = "";
+
+      const weeklyEvents = events
+        .filter(e => isInSelectedWeek(e.start, e.end, selectedDate))
+        .sort((a, b) => b.percentage - a.percentage);
+
+      weeklyEvents.forEach(e => {
+        const div = document.createElement("div");
+        div.className = "sale-item";
+        div.style.borderLeft = `6px solid ${e.color}`;
+        div.style.paddingLeft = "8px";
+
+        const endingSoon = Boolean(e.extendedProps?.endingSoon);
+        if (endingSoon) div.classList.add("ending-soon");
+
+        // Display the inclusive end (for humans) in sidebar
+        const endInclusive = getInclusiveEndFromExclusive(e.end);
+        const endInclusiveStr = toISODateLocal(endInclusive);
+
+        div.innerHTML = `
+          <div class="sale-title">${e.showName}</div>
+          <div class="sale-dates">
+            ${e.start} → ${endInclusiveStr}<br />
+            <strong>${e.percentage}% Off</strong>
+          </div>
+        `;
+
+        container.appendChild(div);
+      });
+
+      if (!weeklyEvents.length) {
+        container.innerHTML = "<em>No sales this week</em>";
+      }
+    }
+
+    async function initCalendar() {
+      const response = await fetch(sheetURL);
+      const data = await response.json();
+
+      if (!data.values) {
+        console.error("No data returned from Google Sheets", data);
+        return;
+      }
+
+      const events = parseSheetData(data.values);
+
+      // Default week picker to today
+      const todayIso = toISODateLocal(new Date());
+      const weekPicker = document.getElementById("weekPicker");
+      weekPicker.value = todayIso;
+
+      renderWeeklySales(events, todayIso);
+
+      weekPicker.addEventListener("change", e => {
+        renderWeeklySales(events, e.target.value);
+      });
+
+      const calendar = new FullCalendar.Calendar(
+        document.getElementById("calendar"),
+        {
+          initialView: "dayGridMonth",
+          height: "100%",
+          eventDisplay: "block",
+          showNonCurrentDates: true,
+          fixedWeekCount: false,
+          events,
+
+          // ✅ Click calendar event -> auto-select that week in sidebar
+          eventClick: function(info) {
+            // Use the event's start date to select the week
+            setWeekToDateAndRender(events, info.event.start);
+          },
+
+          // 🚨 Apply ending-soon styling to calendar event elements
+          eventDidMount: function(arg) {
+            const endingSoon = Boolean(arg.event.extendedProps?.endingSoon);
+            if (endingSoon) {
+              arg.el.classList.add("ending-soon-event");
+              // Optional quick tooltip
+              arg.el.title = (arg.el.title ? arg.el.title + " — " : "") + "Ending within 48 hours";
+            }
+          }
+        }
+      );
+
+      calendar.render();
+    }
+
+    initCalendar();
+  </script>
+</body>
+</html>
