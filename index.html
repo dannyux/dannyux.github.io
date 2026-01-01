@@ -5,67 +5,26 @@
   <title>Sales Calendar</title>
 
   <!-- FullCalendar -->
-  <link rel="stylesheet" href="https://unpkg.com/fullcalendar@6.1.11/index.global.min.css">
+  <link href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.11/index.global.min.css" rel="stylesheet"/>
 
   <style>
-    body {
-      margin: 0;
-      font-family: Arial, sans-serif;
-      display: flex;
-      height: 100vh;
-    }
+    body { margin:0; font-family: Arial, sans-serif; display:flex; height:100vh; }
+    #calendar { flex:3; padding:20px; }
+    #sidebar { flex:1; border-left:1px solid #ddd; padding:20px; overflow-y:auto; background:#fafafa; }
 
-    #calendar {
-      flex: 3;
-      padding: 20px;
-    }
-
-    #sidebar {
-      flex: 1;
-      border-left: 1px solid #ddd;
-      padding: 20px;
-      overflow-y: auto;
-      background: #fafafa;
-    }
-
-    .sale-item {
-      margin-bottom: 15px;
-      padding-bottom: 10px;
-      border-bottom: 1px solid #eee;
-    }
-
-    .sale-title {
-      font-weight: bold;
-    }
-
-    .sale-dates {
-      font-size: 0.9em;
-      color: #555;
-    }
-
-    #weekPicker {
-      margin-bottom: 15px;
-      width: 100%;
-    }
+    .sale-item { margin-bottom:15px; padding-bottom:10px; border-bottom:1px solid #eee; }
+    .sale-title { font-weight:bold; }
+    .sale-dates { font-size:0.9em; color:#555; }
+    #weekPicker { margin-bottom:15px; width:100%; }
 
     /* 🚨 Ending soon styling (sidebar) */
-    .ending-soon {
-      background: #fff7ed;
-      border-bottom-color: #fdba74;
-    }
-
+    .ending-soon { background:#fff7ed; border-bottom-color:#fdba74; }
     .ending-soon .sale-title::after {
-      content: "  • ENDING SOON";
-      font-weight: 700;
-      color: #c2410c;
-      font-size: 0.85em;
+      content:"  • ENDING SOON"; font-weight:700; color:#c2410c; font-size:0.85em;
     }
 
     /* 🚨 Ending soon styling (calendar event) */
-    .fc-event.ending-soon-event {
-      outline: 2px solid #c2410c;
-      outline-offset: 1px;
-    }
+    .fc-event.ending-soon-event { outline:2px solid #c2410c; outline-offset:1px; }
   </style>
 </head>
 <body>
@@ -79,150 +38,143 @@
     <div id="weekly-sales"></div>
   </div>
 
-  <script src="https://unpkg.com/fullcalendar@6.1.11/index.global.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.11/index.global.min.js"></script>
 
   <script>
     // 🔑 GOOGLE SHEETS CONFIG
     const API_KEY = "AIzaSyCd5Qt45W5d9kvUTKoV6yovi8qVVlqjhvk";
     const SHEET_ID = "1adrvtdoa1VPtGhhMvi99ofgje5srBvxLpe3e4kxj8ds";
     const RANGE = "Sheet1!A2:D1000";
+
     const MAX_EVENTS_PER_DAY = 3;
 
     const sheetURL =
-      `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${RANGE}?key=${API_KEY}`;
+      `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(RANGE)}?key=${API_KEY}`;
 
     // 🎨 Color by discount
     function getSaleColor(percentage) {
-      // If % missing/invalid, keep it neutral
-      if (percentage == null || Number.isNaN(percentage)) return "#64748b"; // slate
-      if (percentage >= 50) return "#dc2626"; // red
+      if (Number.isNaN(percentage)) return "#808080";
+      if (percentage >= 50) return "#16a34a"; // green
       if (percentage >= 30) return "#f97316"; // orange
       if (percentage >= 10) return "#2563eb"; // blue
-      return "#808080"; // grey
+      return "#808080"; // gray
     }
 
-    // ---- Date helpers ----
+    // ---------- Date utilities (robust) ----------
 
-    // Converts "MM-DD-YYYY" or "M-D-YYYY" or "YYYY-MM-DD" -> "YYYY-MM-DD"
-    // Returns null if blank/invalid.
+    // Convert "MM-DD-YYYY" or "M-D-YYYY" or "YYYY-MM-DD" -> "YYYY-MM-DD"
     function toISODateFlexible(input) {
-      if (!input) return null;
+      if (input == null) return null;
       const s = String(input).trim();
       if (!s) return null;
 
       // YYYY-MM-DD
       let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
-      if (m) {
-        const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
-        return validateAndFormatISO(y, mo, d);
-      }
+      if (m) return validateAndFormatISO(+m[1], +m[2], +m[3]);
 
       // MM-DD-YYYY (or M-D-YYYY)
       m = s.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
-      if (m) {
-        const mo = Number(m[1]), d = Number(m[2]), y = Number(m[3]);
-        return validateAndFormatISO(y, mo, d);
-      }
+      if (m) return validateAndFormatISO(+m[3], +m[1], +m[2]);
 
       return null;
     }
 
     function validateAndFormatISO(y, mo, d) {
-      if (!Number.isInteger(y) || !Number.isInteger(mo) || !Number.isInteger(d)) return null;
-      if (mo < 1 || mo > 12) return null;
-      if (d < 1 || d > 31) return null;
-
-      // Validate via Date round-trip
-      const dt = new Date(`${y}-${String(mo).padStart(2,"0")}-${String(d).padStart(2,"0")}T00:00:00`);
+      if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+      const iso = `${y}-${String(mo).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+      const dt = new Date(iso + "T00:00:00");
       if (Number.isNaN(dt.getTime())) return null;
-      if (dt.getFullYear() !== y || (dt.getMonth() + 1) !== mo || dt.getDate() !== d) return null;
-
-      return `${y}-${String(mo).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+      // round-trip validation
+      if (dt.getFullYear() !== y || (dt.getMonth()+1) !== mo || dt.getDate() !== d) return null;
+      return iso;
     }
 
-    // FullCalendar expects end to be exclusive for all-day events
+    function toISODateLocal(dateObj) {
+      const d = new Date(dateObj);
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, "0");
+      const day = String(d.getDate()).padStart(2, "0");
+      return `${y}-${m}-${day}`;
+    }
+
+    // For FullCalendar all-day events: end is exclusive
     function addOneDayISO(isoDateStr) {
       const d = new Date(isoDateStr + "T00:00:00");
       d.setDate(d.getDate() + 1);
       return toISODateLocal(d);
     }
 
-    // Convert end-exclusive back to an inclusive end date for display/logic
-    function getInclusiveEndFromExclusive(endExclusiveStr) {
-      const d = new Date(endExclusiveStr + "T00:00:00");
+    function getInclusiveEndFromExclusive(endExclusiveISO) {
+      const d = new Date(endExclusiveISO + "T00:00:00");
       d.setDate(d.getDate() - 1);
       return d;
     }
 
-    // 🚨 Determine if sale ends within the next 48 hours (and hasn't already ended)
     function isEndingIn48Hours(endExclusiveISO) {
-      if (!endExclusiveISO) return false;
       const endInclusive = getInclusiveEndFromExclusive(endExclusiveISO);
       const now = new Date();
       const diffMs = endInclusive.getTime() - now.getTime();
       return diffMs >= 0 && diffMs <= 48 * 60 * 60 * 1000;
     }
 
-    // Format Date -> YYYY-MM-DD (local, safe)
-    function toISODateLocal(dateObj) {
-      const d = new Date(dateObj);
-      const year = d.getFullYear();
-      const month = String(d.getMonth() + 1).padStart(2, "0");
-      const day = String(d.getDate()).padStart(2, "0");
-      return `${year}-${month}-${day}`;
+    // Sidebar display: ISO -> MM-DD-YYYY
+    function formatMMDDYYYYFromISO(isoDateStr) {
+      if (!isoDateStr) return "";
+      const d = new Date(isoDateStr + "T00:00:00");
+      const mm = String(d.getMonth() + 1).padStart(2, "0");
+      const dd = String(d.getDate()).padStart(2, "0");
+      const yyyy = d.getFullYear();
+      return `${mm}-${dd}-${yyyy}`;
     }
 
-    // ---- Parsing sheet rows ----
+    // ---------- Parsing ----------
     function parseSheetData(values) {
-      return values
-        .filter(row => row.length >= 1 && String(row[0] || "").trim() !== "")
-        .map(row => {
-          const showName = String(row[0] || "").trim();
+      const events = [];
 
-          // Allow blank start/end
-          let startISO = toISODateFlexible(row[1]);
-          let endISO = toISODateFlexible(row[2]);
+      for (const row of values) {
+        const showName = String(row?.[0] ?? "").trim();
+        if (!showName) continue;
 
-          // If one is blank, copy the other
-          if (!startISO && endISO) startISO = endISO;
-          if (startISO && !endISO) endISO = startISO;
+        // Allow start/end in MM-DD-YYYY OR YYYY-MM-DD
+        let startISO = toISODateFlexible(row?.[1]);
+        let endISO = toISODateFlexible(row?.[2]);
 
-          // If both are blank, skip (no calendar placement)
-          if (!startISO && !endISO) return null;
+        // Allow blanks: if one is missing, copy the other
+        if (!startISO && endISO) startISO = endISO;
+        if (startISO && !endISO) endISO = startISO;
 
-          // percentage can be blank
-          const rawPct = (row[3] == null) ? "" : String(row[3]).trim();
-          const pct = rawPct === "" ? null : Number(rawPct);
-          const pctForSort = (pct == null || Number.isNaN(pct)) ? -1 : pct;
+        // If still missing, skip safely (no date placement possible)
+        if (!startISO || !endISO) {
+          console.warn("Skipping row (missing/invalid dates):", row);
+          continue;
+        }
 
-          // Create end-exclusive
-          const endExclusive = addOneDayISO(endISO);
+        const percentageRaw = String(row?.[3] ?? "").trim();
+        const percentage = percentageRaw === "" ? NaN : Number(percentageRaw);
 
-          const endingSoon = isEndingIn48Hours(endExclusive);
+        const endExclusiveISO = addOneDayISO(endISO);
 
-          const title = (pct == null || Number.isNaN(pct))
-            ? `${showName}`
-            : `${showName} (${pct}% Off)`;
+        const ev = {
+          title: Number.isNaN(percentage) ? `${showName}` : `${showName} (${percentage}% Off)`,
+          showName,
+          start: startISO,
+          end: endExclusiveISO,
+          percentage,
+          color: getSaleColor(percentage),
+          extendedProps: {
+            endingSoon: isEndingIn48Hours(endExclusiveISO)
+          }
+        };
 
-          return {
-            title,
-            showName,
-            start: startISO,
-            end: endExclusive,
-            percentage: pct,        // may be null
-            percentageForSort: pctForSort,
-            color: getSaleColor(pct),
-            extendedProps: { endingSoon }
-          };
-        })
-        .filter(Boolean);
+        events.push(ev);
+      }
+
+      return events;
     }
 
-    // ---- Week filtering ----
-    function isInSelectedWeek(startISO, endExclusiveISO, selectedDateISO) {
-      if (!startISO || !endExclusiveISO) return false;
-
-      const base = selectedDateISO ? new Date(selectedDateISO + "T00:00:00") : new Date();
+    // ---------- Week filtering ----------
+    function isInSelectedWeek(startISO, endExclusiveISO, selectedISO) {
+      const base = selectedISO ? new Date(selectedISO + "T00:00:00") : new Date();
       const weekStart = new Date(base);
       weekStart.setDate(base.getDate() - base.getDay());
       weekStart.setHours(0, 0, 0, 0);
@@ -234,45 +186,6 @@
              new Date(startISO + "T00:00:00") <= weekEnd;
     }
 
-    // ---- Sidebar ----
-    function renderWeeklySales(events, selectedDateISO = null) {
-      const container = document.getElementById("weekly-sales");
-      container.innerHTML = "";
-
-      const weeklyEvents = events
-        .filter(e => isInSelectedWeek(e.start, e.end, selectedDateISO))
-        .sort((a, b) => b.percentageForSort - a.percentageForSort);
-
-      weeklyEvents.forEach(e => {
-        const div = document.createElement("div");
-        div.className = "sale-item";
-        div.style.borderLeft = `6px solid ${e.color}`;
-        div.style.paddingLeft = "8px";
-
-        if (e.extendedProps?.endingSoon) div.classList.add("ending-soon");
-
-        const endInclusiveStr = toISODateLocal(getInclusiveEndFromExclusive(e.end));
-
-        const pctLine = (e.percentage == null || Number.isNaN(e.percentage))
-          ? `<em>% not set</em>`
-          : `<strong>${e.percentage}% Off</strong>`;
-
-        div.innerHTML = `
-          <div class="sale-title">${e.showName}</div>
-          <div class="sale-dates">
-            ${e.start} → ${endInclusiveStr}<br />
-            ${pctLine}
-          </div>
-        `;
-
-        container.appendChild(div);
-      });
-
-      if (!weeklyEvents.length) {
-        container.innerHTML = "<em>No sales for this week</em>";
-      }
-    }
-
     function setWeekToDateAndRender(events, dateObj) {
       const weekPicker = document.getElementById("weekPicker");
       const iso = toISODateLocal(dateObj);
@@ -280,68 +193,99 @@
       renderWeeklySales(events, iso);
     }
 
-    // ---- Init ----
+    // ---------- Sidebar ----------
+    function renderWeeklySales(events, selectedISO = null) {
+      const container = document.getElementById("weekly-sales");
+      container.innerHTML = "";
+
+      const weeklyEvents = events
+        .filter(e => isInSelectedWeek(e.start, e.end, selectedISO))
+        .sort((a, b) => {
+          const ap = Number.isNaN(a.percentage) ? -1 : a.percentage;
+          const bp = Number.isNaN(b.percentage) ? -1 : b.percentage;
+          return bp - ap;
+        });
+
+      for (const e of weeklyEvents) {
+        const div = document.createElement("div");
+        div.className = "sale-item";
+        div.style.borderLeft = `6px solid ${e.color}`;
+        div.style.paddingLeft = "8px";
+
+        if (e.extendedProps?.endingSoon) div.classList.add("ending-soon");
+
+        const endInclusiveISO = toISODateLocal(getInclusiveEndFromExclusive(e.end));
+        const startFmt = formatMMDDYYYYFromISO(e.start);
+        const endFmt = formatMMDDYYYYFromISO(endInclusiveISO);
+
+        const pctLine = Number.isNaN(e.percentage)
+          ? `<em>% not set</em>`
+          : `<strong>${e.percentage}% Off</strong>`;
+
+        div.innerHTML = `
+          <div class="sale-title">${e.showName}</div>
+          <div class="sale-dates">
+            ${startFmt} → ${endFmt}<br />
+            ${pctLine}
+          </div>
+        `;
+        container.appendChild(div);
+      }
+
+      if (!weeklyEvents.length) container.innerHTML = "<em>No sales this week</em>";
+    }
+
+    // ---------- Init ----------
     async function initCalendar() {
-      // Render calendar immediately so page never looks "blank"
-      const calendar = new FullCalendar.Calendar(
-        document.getElementById("calendar"),
-        {
-          initialView: "dayGridMonth",
-          height: "100%",
-          eventDisplay: "block",
-          showNonCurrentDates: true,
-          fixedWeekCount: false,
-
-          // ✅ "+X more" behavior
-          dayMaxEvents: MAX_EVENTS_PER_DAY,
-          moreLinkClick: "popover",
-
-          events: [],
-
-          // Click calendar event -> auto-select that week in sidebar
-          eventClick: function(info) {
-            setWeekToDateAndRender(window.__events || [], info.event.start);
-          },
-
-          // Ending soon styling on calendar items
-          eventDidMount: function(arg) {
-            const endingSoon = Boolean(arg.event.extendedProps?.endingSoon);
-            if (endingSoon) {
-              arg.el.classList.add("ending-soon-event");
-              arg.el.title = (arg.el.title ? arg.el.title + " — " : "") + "Ending within 48 hours";
-            }
-          }
-        }
-      );
-      calendar.render();
-
-      // Load sheet events
       const resp = await fetch(sheetURL);
       const data = await resp.json();
 
       if (!resp.ok) {
-        console.error("Sheets error:", data);
+        console.error("Sheets API error:", data);
         return;
       }
       if (!data.values) {
-        console.error("No values returned. Check sharing + RANGE tab name.");
+        console.error("No values returned from sheet:", data);
         return;
       }
 
       const events = parseSheetData(data.values);
-      window.__events = events;
 
-      // Sidebar default to today
-      const todayIso = toISODateLocal(new Date());
+      const todayISO = toISODateLocal(new Date());
       const weekPicker = document.getElementById("weekPicker");
-      weekPicker.value = todayIso;
+      weekPicker.value = todayISO;
+      renderWeeklySales(events, todayISO);
 
-      renderWeeklySales(events, todayIso);
-      weekPicker.addEventListener("change", e => renderWeeklySales(events, e.target.value));
+      weekPicker.addEventListener("change", e => {
+        renderWeeklySales(events, e.target.value);
+      });
 
-      // Load into calendar
-      calendar.removeAllEvents();
-      calendar.addEventSource(events);
+      const calendar = new FullCalendar.Calendar(document.getElementById("calendar"), {
+        initialView: "dayGridMonth",
+        height: "100%",
+        eventDisplay: "block",
+        showNonCurrentDates: true,
+        fixedWeekCount: false,
+
+        dayMaxEvents: MAX_EVENTS_PER_DAY,
+        moreLinkClick: "popover",
+
+        events,
+
+        eventClick: function(info) {
+          setWeekToDateAndRender(events, info.event.start);
+        },
+
+        eventDidMount: function(arg) {
+          const endingSoon = Boolean(arg.event.extendedProps?.endingSoon);
+          if (endingSoon) {
+            arg.el.classList.add("ending-soon-event");
+            arg.el.title = (arg.el.title ? arg.el.title + " — " : "") + "Ending within 48 hours";
+          }
+        }
+      });
+
+      calendar.render();
     }
 
     initCalendar();
